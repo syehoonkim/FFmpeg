@@ -52,6 +52,7 @@ static const enum AVPixelFormat supported_formats[] = {
     AV_PIX_FMT_BGR32,
     AV_PIX_FMT_UYVY422,
     AV_PIX_FMT_YUV422P10LE,
+    AV_PIX_FMT_YUV422P,
 };
 
 #define DIV_UP(a, b) (((a) + (b) - 1) / (b))
@@ -113,10 +114,6 @@ typedef struct CUDAScaleContext
     int interp_as_integer;
 
     float param;
-
-    int is_uyvy;
-    CUmodule cu_module_uyvy;
-    CUfunction cu_func_uyvy422p10;
 } CUDAScaleContext;
 
 static av_cold int cudascale_init(AVFilterContext *ctx)
@@ -149,11 +146,7 @@ static av_cold void cudascale_uninit(AVFilterContext *ctx)
             CHECK_CU(cu->cuModuleUnload(s->cu_module));
             s->cu_module = NULL;
         }
-        if (s->cu_module_uyvy)
-        {
-            CHECK_CU(cu->cuModuleUnload(s->cu_module_uyvy));
-            s->cu_module_uyvy = NULL;
-        }
+
         CHECK_CU(cu->cuCtxPopCurrent(&dummy));
     }
 
@@ -233,6 +226,13 @@ static av_cold void set_format_info(AVFilterContext *ctx, enum AVPixelFormat in_
         s->in_plane_channels[p] = FFMAX(s->in_plane_channels[p], s->in_desc->comp[i].step / d);
 
         s->in_plane_depths[p] = s->in_desc->comp[i].depth;
+    }
+
+    if (s->in_fmt == AV_PIX_FMT_UYVY422)
+    {
+        s->in_planes = 1;
+        s->in_plane_channels[0] = 2;
+        s->in_plane_depths[0] = 8;
     }
 }
 
@@ -315,8 +315,6 @@ static av_cold int cudascale_load_functions(AVFilterContext *ctx)
 
     extern const unsigned char ff_vf_scale_cuda_ptx_data[];
     extern const unsigned int ff_vf_scale_cuda_ptx_len;
-    extern const unsigned char ff_vf_scale_cuda_uyvy_ptx_data[];
-    extern const unsigned int ff_vf_scale_cuda_uyvy_ptx_len;
 
     switch (s->interp_algo)
     {
@@ -349,30 +347,6 @@ static av_cold int cudascale_load_functions(AVFilterContext *ctx)
     ret = CHECK_CU(cu->cuCtxPushCurrent(cuda_ctx));
     if (ret < 0)
         return ret;
-
-    if (s->is_uyvy)
-    {
-        ret = ff_cuda_load_module(ctx, s->hwctx, &s->cu_module_uyvy, ff_vf_scale_cuda_uyvy_ptx_data, ff_vf_scale_cuda_ptx_len);
-        if (ret < 0)
-            goto fail;
-
-        const char *function_infix = (s->interp_algo == INTERP_ALGO_NEAREST) ? "Nearest" : (s->interp_algo == INTERP_ALGO_BILINEAR) ? "Bilinear"
-                                                                                       : (s->interp_algo == INTERP_ALGO_LANCZOS)    ? "Lanczos"
-                                                                                                                                    : "Bicubic";
-
-        char kname[96];
-        snprintf(kname, sizeof(kname), "UYVYToUYV422P10_%s", function_infix);
-
-        ret = CHECK_CU(cu->cuModuleGetFunction(&s->cu_func_uyvy422p10, s->cu_module_uyvy, kname));
-        if (ret < 0)
-        {
-            av_log(ctx, AV_LOG_FATAL, "UYVY→422P10 kernel not found: %s\n", kname);
-            ret = AVERROR(ENOSYS);
-        }
-        CHECK_CU(cu->cuCtxPopCurrent(&dummy));
-
-        return ret;
-    }
 
     ret = ff_cuda_load_module(ctx, s->hwctx, &s->cu_module,
                               ff_vf_scale_cuda_ptx_data, ff_vf_scale_cuda_ptx_len);
@@ -440,14 +414,12 @@ static av_cold int cudascale_config_props(AVFilterLink *outlink)
     s->hwctx = device_hwctx;
     s->cu_stream = s->hwctx->stream;
 
-    s->is_uyvy = (s->in_fmt == AV_PIX_FMT_UYVY422);
-    if (s->is_uyvy)
+    if (s->in_fmt == AV_PIX_FMT_UYVY422)
     {
-        if (s->out_fmt != AV_PIX_FMT_YUV422P10LE)
+        if (s->out_fmt != AV_PIX_FMT_YUV422P10LE && s->out_fmt != AV_PIX_FMT_YUV422P)
         {
-            av_log(ctx, AV_LOG_ERROR, "UYVY input requires out_fmt=YUV422P10LE (got %s)\n", av_get_pix_fmt_name(s->out_fmt));
+            av_log(ctx, AV_LOG_ERROR, "UYVY input supports yuv422p10le/yuv422p only (got %s)\n", av_get_pix_fmt_name(s->out_fmt));
         }
-
         if (s->interp_algo == INTERP_ALGO_DEFAULT)
             s->interp_algo = INTERP_ALGO_BILINEAR;
     }
@@ -583,35 +555,6 @@ exit:
     return ret;
 }
 
-static int scalecuda_resize_uyvy_to_yuv422p10(AVFilterContext *ctx, AVFrame *out, AVFrame *in)
-{
-    CUDAScaleContext *s = ctx->priv;
-    CudaFunctions *cu = s->hwctx->internal->cuda_dl;
-
-    CUdeviceptr src = (CUdeviceptr)in->data[0];
-    size_t sp = in->linesize[0];
-
-    CUdeviceptr dy = (CUdeviceptr)out->data[0];
-    size_t dyp = out->linesize[0];
-    CUdeviceptr du = (CUdeviceptr)out->data[1];
-    size_t dup = out->linesize[1];
-    CUdeviceptr dv = (CUdeviceptr)out->data[2];
-    size_t dvp = out->linesize[2];
-
-    int src_w = in->width, src_h = in->height;
-    int dst_w = out->width, dst_h = out->height;
-
-    void *args[] = {
-        &src, &sp, &src_w, &src_h,
-        &dy, &dyp, &du, &dup, &dv, &dvp,
-        &dst_w, &dst_h, &s->param};
-
-    return CHECK_CU(cu->cuLaunchKernel(
-        s->cu_func_uyvy422p10,
-        DIV_UP(dst_w, BLOCKX), DIV_UP(dst_h, BLOCKY), 1,
-        BLOCKX, BLOCKY, 1, 0, s->cu_stream, args, NULL));
-}
-
 static int cudascale_scale(AVFilterContext *ctx, AVFrame *out, AVFrame *in)
 {
     CUDAScaleContext *s = ctx->priv;
@@ -619,14 +562,7 @@ static int cudascale_scale(AVFilterContext *ctx, AVFrame *out, AVFrame *in)
     AVFrame *src = in;
     int ret;
 
-    if (s->is_uyvy)
-    {
-        ret = scalecuda_resize_uyvy_to_yuv422p10(ctx, s->frame, src);
-    }
-    else
-    {
-        ret = scalecuda_resize(ctx, s->frame, src);
-    }
+    ret = scalecuda_resize(ctx, s->frame, src);
     if (ret < 0)
         return ret;
 

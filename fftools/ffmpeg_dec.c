@@ -36,83 +36,88 @@
 
 #include "ffmpeg.h"
 
-typedef struct DecoderPriv {
-    Decoder             dec;
+typedef struct DecoderPriv
+{
+    Decoder dec;
 
-    AVCodecContext     *dec_ctx;
+    AVCodecContext *dec_ctx;
 
-    AVFrame            *frame;
-    AVFrame            *frame_tmp_ref;
-    AVPacket           *pkt;
+    AVFrame *frame;
+    AVFrame *frame_tmp_ref;
+    AVPacket *pkt;
 
     // override output video sample aspect ratio with this value
-    AVRational          sar_override;
+    AVRational sar_override;
 
-    AVRational          framerate_in;
+    AVRational framerate_in;
 
     // a combination of DECODER_FLAG_*, provided to dec_open()
-    int                 flags;
-    int                 apply_cropping;
+    int flags;
+    int apply_cropping;
 
-    enum AVPixelFormat  hwaccel_pix_fmt;
-    enum HWAccelID      hwaccel_id;
+    enum AVPixelFormat hwaccel_pix_fmt;
+    enum HWAccelID hwaccel_id;
     enum AVHWDeviceType hwaccel_device_type;
-    enum AVPixelFormat  hwaccel_output_format;
+    enum AVPixelFormat hwaccel_output_format;
 
     // pts/estimated duration of the last decoded frame
     // * in decoder timebase for video,
     // * in last_frame_tb (may change during decoding) for audio
-    int64_t             last_frame_pts;
-    int64_t             last_frame_duration_est;
-    AVRational          last_frame_tb;
-    int64_t             last_filter_in_rescale_delta;
-    int                 last_frame_sample_rate;
+    int64_t last_frame_pts;
+    int64_t last_frame_duration_est;
+    AVRational last_frame_tb;
+    int64_t last_filter_in_rescale_delta;
+    int last_frame_sample_rate;
 
     /* previous decoded subtitles */
-    AVFrame            *sub_prev[2];
-    AVFrame            *sub_heartbeat;
+    AVFrame *sub_prev[2];
+    AVFrame *sub_heartbeat;
 
-    Scheduler          *sch;
-    unsigned            sch_idx;
+    Scheduler *sch;
+    unsigned sch_idx;
 
     // this decoder's index in decoders or -1
-    int                 index;
-    void               *log_parent;
-    char                log_name[32];
-    char               *parent_name;
+    int index;
+    void *log_parent;
+    char log_name[32];
+    char *parent_name;
 
     // user specified decoder multiview options manually
-    int                 multiview_user_config;
+    int multiview_user_config;
 
-    struct {
-        ViewSpecifier   vs;
-        unsigned        out_idx;
-    }                  *views_requested;
-    int              nb_views_requested;
+    struct
+    {
+        ViewSpecifier vs;
+        unsigned out_idx;
+    } *views_requested;
+    int nb_views_requested;
 
     /* A map of view ID to decoder outputs.
      * MUST NOT be accessed outside of get_format()/get_buffer() */
-    struct {
-        unsigned        id;
-        uintptr_t       out_mask;
-    }                  *view_map;
-    int              nb_view_map;
+    struct
+    {
+        unsigned id;
+        uintptr_t out_mask;
+    } *view_map;
+    int nb_view_map;
 
-    struct {
-        AVDictionary       *opts;
-        const AVCodec      *codec;
+    struct
+    {
+        AVDictionary *opts;
+        const AVCodec *codec;
     } standalone_init;
 } DecoderPriv;
 
 static DecoderPriv *dp_from_dec(Decoder *d)
 {
-    return (DecoderPriv*)d;
+    return (DecoderPriv *)d;
 }
 
 // data that is local to the decoder thread and not visible outside of it
-typedef struct DecThreadContext {
-    AVFrame         *frame;
-    AVPacket        *pkt;
+typedef struct DecThreadContext
+{
+    AVFrame *frame;
+    AVPacket *pkt;
 } DecThreadContext;
 
 void dec_free(Decoder **pdec)
@@ -152,10 +157,10 @@ static const char *dec_item_name(void *obj)
 }
 
 static const AVClass dec_class = {
-    .class_name                = "Decoder",
-    .version                   = LIBAVUTIL_VERSION_INT,
+    .class_name = "Decoder",
+    .version = LIBAVUTIL_VERSION_INT,
     .parent_log_context_offset = offsetof(DecoderPriv, log_parent),
-    .item_name                 = dec_item_name,
+    .item_name = dec_item_name,
 };
 
 static int decoder_thread(void *arg);
@@ -179,24 +184,24 @@ static int dec_alloc(DecoderPriv **pdec, Scheduler *sch, int send_end_ts)
     if (!dp->pkt)
         goto fail;
 
-    dp->index                        = -1;
-    dp->dec.class                    = &dec_class;
+    dp->index = -1;
+    dp->dec.class = &dec_class;
     dp->last_filter_in_rescale_delta = AV_NOPTS_VALUE;
-    dp->last_frame_pts               = AV_NOPTS_VALUE;
-    dp->last_frame_tb                = (AVRational){ 1, 1 };
-    dp->hwaccel_pix_fmt              = AV_PIX_FMT_NONE;
+    dp->last_frame_pts = AV_NOPTS_VALUE;
+    dp->last_frame_tb = (AVRational){1, 1};
+    dp->hwaccel_pix_fmt = AV_PIX_FMT_NONE;
 
     ret = sch_add_dec(sch, decoder_thread, dp, send_end_ts);
     if (ret < 0)
         goto fail;
-    dp->sch     = sch;
+    dp->sch = sch;
     dp->sch_idx = ret;
 
     *pdec = dp;
 
     return 0;
 fail:
-    dec_free((Decoder**)&dp);
+    dec_free((Decoder **)&dp);
     return ret >= 0 ? AVERROR(ENOMEM) : ret;
 }
 
@@ -204,7 +209,7 @@ static AVRational audio_samplerate_update(DecoderPriv *dp,
                                           const AVFrame *frame)
 {
     const int prev = dp->last_frame_tb.den;
-    const int sr   = frame->sample_rate;
+    const int sr = frame->sample_rate;
 
     AVRational tb_new;
     int64_t gcd;
@@ -212,17 +217,20 @@ static AVRational audio_samplerate_update(DecoderPriv *dp,
     if (frame->sample_rate == dp->last_frame_sample_rate)
         goto finish;
 
-    gcd  = av_gcd(prev, sr);
+    gcd = av_gcd(prev, sr);
 
-    if (prev / gcd >= INT_MAX / sr) {
+    if (prev / gcd >= INT_MAX / sr)
+    {
         av_log(dp, AV_LOG_WARNING,
                "Audio timestamps cannot be represented exactly after "
-               "sample rate change: %d -> %d\n", prev, sr);
+               "sample rate change: %d -> %d\n",
+               prev, sr);
 
         // LCM of 192000, 44100, allows to represent all common samplerates
-        tb_new = (AVRational){ 1, 28224000 };
-    } else
-        tb_new = (AVRational){ 1, prev / gcd * sr };
+        tb_new = (AVRational){1, 28224000};
+    }
+    else
+        tb_new = (AVRational){1, prev / gcd * sr};
 
     // keep the frame timebase if it is strictly better than
     // the samplerate-defined one
@@ -236,7 +244,7 @@ static AVRational audio_samplerate_update(DecoderPriv *dp,
     dp->last_frame_duration_est = av_rescale_q(dp->last_frame_duration_est,
                                                dp->last_frame_tb, tb_new);
 
-    dp->last_frame_tb          = tb_new;
+    dp->last_frame_tb = tb_new;
     dp->last_frame_sample_rate = frame->sample_rate;
 
 finish:
@@ -253,15 +261,17 @@ static void audio_ts_process(DecoderPriv *dp, AVFrame *frame)
     // generation that can represent timestamps from all the samplerates
     // seen so far
     tb = audio_samplerate_update(dp, frame);
-    pts_pred = dp->last_frame_pts == AV_NOPTS_VALUE ? 0 :
-               dp->last_frame_pts + dp->last_frame_duration_est;
+    pts_pred = dp->last_frame_pts == AV_NOPTS_VALUE ? 0 : dp->last_frame_pts + dp->last_frame_duration_est;
 
-    if (frame->pts == AV_NOPTS_VALUE) {
+    if (frame->pts == AV_NOPTS_VALUE)
+    {
         frame->pts = pts_pred;
         frame->time_base = tb;
-    } else if (dp->last_frame_pts != AV_NOPTS_VALUE &&
-               frame->pts > av_rescale_q_rnd(pts_pred, tb, frame->time_base,
-                                             AV_ROUND_UP)) {
+    }
+    else if (dp->last_frame_pts != AV_NOPTS_VALUE &&
+             frame->pts > av_rescale_q_rnd(pts_pred, tb, frame->time_base,
+                                           AV_ROUND_UP))
+    {
         // there was a gap in timestamps, reset conversion state
         dp->last_filter_in_rescale_delta = AV_NOPTS_VALUE;
     }
@@ -270,25 +280,24 @@ static void audio_ts_process(DecoderPriv *dp, AVFrame *frame)
                                   tb, frame->nb_samples,
                                   &dp->last_filter_in_rescale_delta, tb);
 
-    dp->last_frame_pts          = frame->pts;
+    dp->last_frame_pts = frame->pts;
     dp->last_frame_duration_est = av_rescale_q(frame->nb_samples,
                                                tb_filter, tb);
 
     // finally convert to filtering timebase
-    frame->pts       = av_rescale_q(frame->pts, tb, tb_filter);
-    frame->duration  = frame->nb_samples;
+    frame->pts = av_rescale_q(frame->pts, tb, tb_filter);
+    frame->duration = frame->nb_samples;
     frame->time_base = tb_filter;
 }
 
 static int64_t video_duration_estimate(const DecoderPriv *dp, const AVFrame *frame)
 {
-    const int  ts_unreliable = dp->flags & DECODER_FLAG_TS_UNRELIABLE;
-    const int      fr_forced = dp->flags & DECODER_FLAG_FRAMERATE_FORCED;
+    const int ts_unreliable = dp->flags & DECODER_FLAG_TS_UNRELIABLE;
+    const int fr_forced = dp->flags & DECODER_FLAG_FRAMERATE_FORCED;
     int64_t codec_duration = 0;
     // difference between this and last frame's timestamps
     const int64_t ts_diff =
-        (frame->pts != AV_NOPTS_VALUE && dp->last_frame_pts != AV_NOPTS_VALUE) ?
-        frame->pts - dp->last_frame_pts : -1;
+        (frame->pts != AV_NOPTS_VALUE && dp->last_frame_pts != AV_NOPTS_VALUE) ? frame->pts - dp->last_frame_pts : -1;
 
     // XXX lavf currently makes up frame durations when they are not provided by
     // the container. As there is no way to reliably distinguish real container
@@ -305,10 +314,11 @@ static int64_t video_duration_estimate(const DecoderPriv *dp, const AVFrame *fra
         (frame->duration > 0 && !ts_unreliable && !duration_unreliable))
         return frame->duration;
 
-    if (dp->dec_ctx->framerate.den && dp->dec_ctx->framerate.num) {
+    if (dp->dec_ctx->framerate.den && dp->dec_ctx->framerate.num)
+    {
         int fields = frame->repeat_pict + 2;
         AVRational field_rate = av_mul_q(dp->dec_ctx->framerate,
-                                         (AVRational){ 2, 1 });
+                                         (AVRational){2, 1});
         codec_duration = av_rescale_q(fields, av_inv_q(field_rate),
                                       frame->time_base);
     }
@@ -329,7 +339,8 @@ static int64_t video_duration_estimate(const DecoderPriv *dp, const AVFrame *fra
         return codec_duration;
 
     // try average framerate
-    if (dp->framerate_in.num && dp->framerate_in.den) {
+    if (dp->framerate_in.num && dp->framerate_in.den)
+    {
         int64_t d = av_rescale_q(1, av_inv_q(dp->framerate_in),
                                  frame->time_base);
         if (d > 0)
@@ -347,7 +358,8 @@ static int hwaccel_retrieve_data(AVCodecContext *avctx, AVFrame *input)
     enum AVPixelFormat output_format = dp->hwaccel_output_format;
     int err;
 
-    if (input->format == output_format) {
+    if (input->format == output_format)
+    {
         // Nothing to do.
         return 0;
     }
@@ -359,14 +371,17 @@ static int hwaccel_retrieve_data(AVCodecContext *avctx, AVFrame *input)
     output->format = output_format;
 
     err = av_hwframe_transfer_data(output, input, 0);
-    if (err < 0) {
+    if (err < 0)
+    {
         av_log(avctx, AV_LOG_ERROR, "Failed to transfer data to "
-               "output frame: %d.\n", err);
+                                    "output frame: %d.\n",
+               err);
         goto fail;
     }
 
     err = av_frame_copy_props(output, input);
-    if (err < 0) {
+    if (err < 0)
+    {
         av_frame_unref(output);
         goto fail;
     }
@@ -386,13 +401,15 @@ static int video_frame_process(DecoderPriv *dp, AVFrame *frame,
                                unsigned *outputs_mask)
 {
 #if FFMPEG_OPT_TOP
-    if (dp->flags & DECODER_FLAG_TOP_FIELD_FIRST) {
+    if (dp->flags & DECODER_FLAG_TOP_FIELD_FIRST)
+    {
         av_log(dp, AV_LOG_WARNING, "-top is deprecated, use the setfield filter instead\n");
         frame->flags |= AV_FRAME_FLAG_TOP_FIELD_FIRST;
     }
 #endif
 
-    if (frame->format == dp->hwaccel_pix_fmt) {
+    if (frame->format == dp->hwaccel_pix_fmt)
+    {
         int err = hwaccel_retrieve_data(dp->dec_ctx, frame);
         if (err < 0)
             return err;
@@ -401,23 +418,24 @@ static int video_frame_process(DecoderPriv *dp, AVFrame *frame,
     frame->pts = frame->best_effort_timestamp;
 
     // forced fixed framerate
-    if (dp->flags & DECODER_FLAG_FRAMERATE_FORCED) {
-        frame->pts       = AV_NOPTS_VALUE;
-        frame->duration  = 1;
+    if (dp->flags & DECODER_FLAG_FRAMERATE_FORCED)
+    {
+        frame->pts = AV_NOPTS_VALUE;
+        frame->duration = 1;
         frame->time_base = av_inv_q(dp->framerate_in);
     }
 
     // no timestamp available - extrapolate from previous frame duration
     if (frame->pts == AV_NOPTS_VALUE)
-        frame->pts = dp->last_frame_pts == AV_NOPTS_VALUE ? 0 :
-                     dp->last_frame_pts + dp->last_frame_duration_est;
+        frame->pts = dp->last_frame_pts == AV_NOPTS_VALUE ? 0 : dp->last_frame_pts + dp->last_frame_duration_est;
 
     // update timestamp history
     dp->last_frame_duration_est = video_duration_estimate(dp, frame);
-    dp->last_frame_pts          = frame->pts;
-    dp->last_frame_tb           = frame->time_base;
+    dp->last_frame_pts = frame->pts;
+    dp->last_frame_tb = frame->time_base;
 
-    if (debug_ts) {
+    if (debug_ts)
+    {
         av_log(dp, AV_LOG_INFO,
                "decoder -> pts:%s pts_time:%s "
                "pkt_dts:%s pkt_dts_time:%s "
@@ -436,10 +454,12 @@ static int video_frame_process(DecoderPriv *dp, AVFrame *frame,
     if (dp->sar_override.num)
         frame->sample_aspect_ratio = dp->sar_override;
 
-    if (dp->apply_cropping) {
+    if (dp->apply_cropping)
+    {
         // lavfi does not require aligned frame data
         int ret = av_frame_apply_cropping(frame, AV_FRAME_CROP_UNALIGNED);
-        if (ret < 0) {
+        if (ret < 0)
+        {
             av_log(dp, AV_LOG_ERROR, "Error applying decoder cropping\n");
             return ret;
         }
@@ -460,8 +480,7 @@ static int copy_av_subtitle(AVSubtitle *dst, const AVSubtitle *src)
         .end_display_time = src->end_display_time,
         .num_rects = 0,
         .rects = NULL,
-        .pts = src->pts
-    };
+        .pts = src->pts};
 
     if (!src->num_rects)
         goto success;
@@ -469,50 +488,54 @@ static int copy_av_subtitle(AVSubtitle *dst, const AVSubtitle *src)
     if (!(tmp.rects = av_calloc(src->num_rects, sizeof(*tmp.rects))))
         return AVERROR(ENOMEM);
 
-    for (int i = 0; i < src->num_rects; i++) {
+    for (int i = 0; i < src->num_rects; i++)
+    {
         AVSubtitleRect *src_rect = src->rects[i];
         AVSubtitleRect *dst_rect;
 
-        if (!(dst_rect = tmp.rects[i] = av_mallocz(sizeof(*tmp.rects[0])))) {
+        if (!(dst_rect = tmp.rects[i] = av_mallocz(sizeof(*tmp.rects[0]))))
+        {
             ret = AVERROR(ENOMEM);
             goto cleanup;
         }
 
         tmp.num_rects++;
 
-        dst_rect->type      = src_rect->type;
-        dst_rect->flags     = src_rect->flags;
+        dst_rect->type = src_rect->type;
+        dst_rect->flags = src_rect->flags;
 
-        dst_rect->x         = src_rect->x;
-        dst_rect->y         = src_rect->y;
-        dst_rect->w         = src_rect->w;
-        dst_rect->h         = src_rect->h;
+        dst_rect->x = src_rect->x;
+        dst_rect->y = src_rect->y;
+        dst_rect->w = src_rect->w;
+        dst_rect->h = src_rect->h;
         dst_rect->nb_colors = src_rect->nb_colors;
 
         if (src_rect->text)
-            if (!(dst_rect->text = av_strdup(src_rect->text))) {
+            if (!(dst_rect->text = av_strdup(src_rect->text)))
+            {
                 ret = AVERROR(ENOMEM);
                 goto cleanup;
             }
 
         if (src_rect->ass)
-            if (!(dst_rect->ass = av_strdup(src_rect->ass))) {
+            if (!(dst_rect->ass = av_strdup(src_rect->ass)))
+            {
                 ret = AVERROR(ENOMEM);
                 goto cleanup;
             }
 
-        for (int j = 0; j < 4; j++) {
+        for (int j = 0; j < 4; j++)
+        {
             // SUBTITLE_BITMAP images are special in the sense that they
             // are like PAL8 images. first pointer to data, second to
             // palette. This makes the size calculation match this.
-            size_t buf_size = src_rect->type == SUBTITLE_BITMAP && j == 1 ?
-                              AVPALETTE_SIZE :
-                              src_rect->h * src_rect->linesize[j];
+            size_t buf_size = src_rect->type == SUBTITLE_BITMAP && j == 1 ? AVPALETTE_SIZE : src_rect->h * src_rect->linesize[j];
 
             if (!src_rect->data[j])
                 continue;
 
-            if (!(dst_rect->data[j] = av_memdup(src_rect->data[j], buf_size))) {
+            if (!(dst_rect->data[j] = av_memdup(src_rect->data[j], buf_size)))
+            {
                 ret = AVERROR(ENOMEM);
                 goto cleanup;
             }
@@ -533,7 +556,7 @@ cleanup:
 
 static void subtitle_free(void *opaque, uint8_t *data)
 {
-    AVSubtitle *sub = (AVSubtitle*)data;
+    AVSubtitle *sub = (AVSubtitle *)data;
     avsubtitle_free(sub);
     av_free(sub);
 }
@@ -544,23 +567,28 @@ static int subtitle_wrap_frame(AVFrame *frame, AVSubtitle *subtitle, int copy)
     AVSubtitle *sub;
     int ret;
 
-    if (copy) {
+    if (copy)
+    {
         sub = av_mallocz(sizeof(*sub));
         ret = sub ? copy_av_subtitle(sub, subtitle) : AVERROR(ENOMEM);
-        if (ret < 0) {
+        if (ret < 0)
+        {
             av_freep(&sub);
             return ret;
         }
-    } else {
+    }
+    else
+    {
         sub = av_memdup(subtitle, sizeof(*subtitle));
         if (!sub)
             return AVERROR(ENOMEM);
         memset(subtitle, 0, sizeof(*subtitle));
     }
 
-    buf = av_buffer_create((uint8_t*)sub, sizeof(*sub),
+    buf = av_buffer_create((uint8_t *)sub, sizeof(*sub),
                            subtitle_free, NULL, 0);
-    if (!buf) {
+    if (!buf)
+    {
         avsubtitle_free(sub);
         av_freep(&sub);
         return AVERROR(ENOMEM);
@@ -573,19 +601,21 @@ static int subtitle_wrap_frame(AVFrame *frame, AVSubtitle *subtitle, int copy)
 
 static int process_subtitle(DecoderPriv *dp, AVFrame *frame)
 {
-    const AVSubtitle *subtitle = (AVSubtitle*)frame->buf[0]->data;
+    const AVSubtitle *subtitle = (AVSubtitle *)frame->buf[0]->data;
     int ret = 0;
 
-    if (dp->flags & DECODER_FLAG_FIX_SUB_DURATION) {
-        AVSubtitle *sub_prev = dp->sub_prev[0]->buf[0] ?
-                               (AVSubtitle*)dp->sub_prev[0]->buf[0]->data : NULL;
+    if (dp->flags & DECODER_FLAG_FIX_SUB_DURATION)
+    {
+        AVSubtitle *sub_prev = dp->sub_prev[0]->buf[0] ? (AVSubtitle *)dp->sub_prev[0]->buf[0]->data : NULL;
         int end = 1;
-        if (sub_prev) {
+        if (sub_prev)
+        {
             end = av_rescale(subtitle->pts - sub_prev->pts,
                              1000, AV_TIME_BASE);
-            if (end < sub_prev->end_display_time) {
+            if (end < sub_prev->end_display_time)
+            {
                 av_log(dp, AV_LOG_DEBUG,
-                       "Subtitle duration reduced from %"PRId32" to %d%s\n",
+                       "Subtitle duration reduced from %" PRId32 " to %d%s\n",
                        sub_prev->end_display_time, end,
                        end <= 0 ? ", dropping it" : "");
                 sub_prev->end_display_time = end;
@@ -595,10 +625,10 @@ static int process_subtitle(DecoderPriv *dp, AVFrame *frame)
         av_frame_unref(dp->sub_prev[1]);
         av_frame_move_ref(dp->sub_prev[1], frame);
 
-        frame    = dp->sub_prev[0];
-        subtitle = frame->buf[0] ? (AVSubtitle*)frame->buf[0]->data : NULL;
+        frame = dp->sub_prev[0];
+        subtitle = frame->buf[0] ? (AVSubtitle *)frame->buf[0]->data : NULL;
 
-        FFSWAP(AVFrame*, dp->sub_prev[0], dp->sub_prev[1]);
+        FFSWAP(AVFrame *, dp->sub_prev[0], dp->sub_prev[1]);
 
         if (end <= 0)
             return 0;
@@ -617,8 +647,7 @@ static int process_subtitle(DecoderPriv *dp, AVFrame *frame)
 static int fix_sub_duration_heartbeat(DecoderPriv *dp, int64_t signal_pts)
 {
     int ret = AVERROR_BUG;
-    AVSubtitle *prev_subtitle = dp->sub_prev[0]->buf[0] ?
-        (AVSubtitle*)dp->sub_prev[0]->buf[0]->data : NULL;
+    AVSubtitle *prev_subtitle = dp->sub_prev[0]->buf[0] ? (AVSubtitle *)dp->sub_prev[0]->buf[0]->data : NULL;
     AVSubtitle *subtitle;
 
     if (!(dp->flags & DECODER_FLAG_FIX_SUB_DURATION) || !prev_subtitle ||
@@ -630,7 +659,7 @@ static int fix_sub_duration_heartbeat(DecoderPriv *dp, int64_t signal_pts)
     if (ret < 0)
         return ret;
 
-    subtitle = (AVSubtitle*)dp->sub_heartbeat->buf[0]->data;
+    subtitle = (AVSubtitle *)dp->sub_heartbeat->buf[0]->data;
     subtitle->pts = signal_pts;
 
     return process_subtitle(dp, dp->sub_heartbeat);
@@ -644,19 +673,23 @@ static int transcode_subtitles(DecoderPriv *dp, const AVPacket *pkt,
     int got_output;
     int ret;
 
-    if (pkt && (intptr_t)pkt->opaque == PKT_OPAQUE_SUB_HEARTBEAT) {
-        frame->pts       = pkt->pts;
+    if (pkt && (intptr_t)pkt->opaque == PKT_OPAQUE_SUB_HEARTBEAT)
+    {
+        frame->pts = pkt->pts;
         frame->time_base = pkt->time_base;
-        frame->opaque    = (void*)(intptr_t)FRAME_OPAQUE_SUB_HEARTBEAT;
+        frame->opaque = (void *)(intptr_t)FRAME_OPAQUE_SUB_HEARTBEAT;
 
         ret = sch_dec_send(dp->sch, dp->sch_idx, 0, frame);
         return ret == AVERROR_EOF ? AVERROR_EXIT : ret;
-    } else if (pkt && (intptr_t)pkt->opaque == PKT_OPAQUE_FIX_SUB_DURATION) {
+    }
+    else if (pkt && (intptr_t)pkt->opaque == PKT_OPAQUE_FIX_SUB_DURATION)
+    {
         return fix_sub_duration_heartbeat(dp, av_rescale_q(pkt->pts, pkt->time_base,
                                                            AV_TIME_BASE_Q));
     }
 
-    if (!pkt) {
+    if (!pkt)
+    {
         flush_pkt = av_packet_alloc();
         if (!flush_pkt)
             return AVERROR(ENOMEM);
@@ -666,7 +699,8 @@ static int transcode_subtitles(DecoderPriv *dp, const AVPacket *pkt,
                                    pkt ? pkt : flush_pkt);
     av_packet_free(&flush_pkt);
 
-    if (ret < 0) {
+    if (ret < 0)
+    {
         av_log(dp, AV_LOG_ERROR, "Error decoding subtitles: %s\n",
                av_err2str(ret));
         dp->dec.decode_errors++;
@@ -683,12 +717,13 @@ static int transcode_subtitles(DecoderPriv *dp, const AVPacket *pkt,
     // inside the frame
     // eventually, subtitles should be switched to use AVFrames natively
     ret = subtitle_wrap_frame(frame, &subtitle, 0);
-    if (ret < 0) {
+    if (ret < 0)
+    {
         avsubtitle_free(&subtitle);
         return ret;
     }
 
-    frame->width  = dp->dec_ctx->width;
+    frame->width = dp->dec_ctx->width;
     frame->height = dp->dec_ctx->height;
 
     return process_subtitle(dp, frame);
@@ -709,12 +744,14 @@ static int packet_decode(DecoderPriv *dp, AVPacket *pkt, AVFrame *frame)
     if (pkt && pkt->size == 0)
         return 0;
 
-    if (pkt && (dp->flags & DECODER_FLAG_TS_UNRELIABLE)) {
+    if (pkt && (dp->flags & DECODER_FLAG_TS_UNRELIABLE))
+    {
         pkt->pts = AV_NOPTS_VALUE;
         pkt->dts = AV_NOPTS_VALUE;
     }
 
-    if (pkt) {
+    if (pkt)
+    {
         FrameData *fd = packet_data(pkt);
         if (!fd)
             return AVERROR(ENOMEM);
@@ -722,10 +759,12 @@ static int packet_decode(DecoderPriv *dp, AVPacket *pkt, AVFrame *frame)
     }
 
     ret = avcodec_send_packet(dec, pkt);
-    if (ret < 0 && !(ret == AVERROR_EOF && !pkt)) {
+    if (ret < 0 && !(ret == AVERROR_EOF && !pkt))
+    {
         // In particular, we don't expect AVERROR(EAGAIN), because we read all
         // decoded frames with avcodec_receive_frame() until done.
-        if (ret == AVERROR(EAGAIN)) {
+        if (ret == AVERROR(EAGAIN))
+        {
             av_log(dp, AV_LOG_FATAL, "A decoder returned an unexpected error code. "
                                      "This is a bug, please report it.\n");
             return AVERROR_BUG;
@@ -741,7 +780,8 @@ static int packet_decode(DecoderPriv *dp, AVPacket *pkt, AVFrame *frame)
             return ret;
     }
 
-    while (1) {
+    while (1)
+    {
         FrameData *fd;
         unsigned outputs_mask = 1;
 
@@ -751,12 +791,17 @@ static int packet_decode(DecoderPriv *dp, AVPacket *pkt, AVFrame *frame)
         ret = avcodec_receive_frame(dec, frame);
         update_benchmark("decode_%s %s", type_desc, dp->parent_name);
 
-        if (ret == AVERROR(EAGAIN)) {
+        if (ret == AVERROR(EAGAIN))
+        {
             av_assert0(pkt); // should never happen during flushing
             return 0;
-        } else if (ret == AVERROR_EOF) {
+        }
+        else if (ret == AVERROR_EOF)
+        {
             return ret;
-        } else if (ret < 0) {
+        }
+        else if (ret < 0)
+        {
             av_log(dp, AV_LOG_ERROR, "Decoding error: %s\n", av_err2str(ret));
             dp->dec.decode_errors++;
 
@@ -766,34 +811,40 @@ static int packet_decode(DecoderPriv *dp, AVPacket *pkt, AVFrame *frame)
             continue;
         }
 
-        if (frame->decode_error_flags || (frame->flags & AV_FRAME_FLAG_CORRUPT)) {
+        if (frame->decode_error_flags || (frame->flags & AV_FRAME_FLAG_CORRUPT))
+        {
             av_log(dp, exit_on_error ? AV_LOG_FATAL : AV_LOG_WARNING,
                    "corrupt decoded frame\n");
             if (exit_on_error)
                 return AVERROR_INVALIDDATA;
         }
 
-        fd      = frame_data(frame);
-        if (!fd) {
+        fd = frame_data(frame);
+        if (!fd)
+        {
             av_frame_unref(frame);
             return AVERROR(ENOMEM);
         }
-        fd->dec.pts                 = frame->pts;
-        fd->dec.tb                  = dec->pkt_timebase;
-        fd->dec.frame_num           = dec->frame_num - 1;
-        fd->bits_per_raw_sample     = dec->bits_per_raw_sample;
+        fd->dec.pts = frame->pts;
+        fd->dec.tb = dec->pkt_timebase;
+        fd->dec.frame_num = dec->frame_num - 1;
+        fd->bits_per_raw_sample = dec->bits_per_raw_sample;
 
         fd->wallclock[LATENCY_PROBE_DEC_POST] = av_gettime_relative();
 
         frame->time_base = dec->pkt_timebase;
 
-        if (dec->codec_type == AVMEDIA_TYPE_AUDIO) {
+        if (dec->codec_type == AVMEDIA_TYPE_AUDIO)
+        {
             dp->dec.samples_decoded += frame->nb_samples;
 
             audio_ts_process(dp, frame);
-        } else {
+        }
+        else
+        {
             ret = video_frame_process(dp, frame, &outputs_mask);
-            if (ret < 0) {
+            if (ret < 0)
+            {
                 av_log(dp, AV_LOG_FATAL,
                        "Error while processing the decoded data\n");
                 return ret;
@@ -802,7 +853,8 @@ static int packet_decode(DecoderPriv *dp, AVPacket *pkt, AVFrame *frame)
 
         dp->dec.frames_decoded++;
 
-        for (int i = 0; i < stdc_count_ones(outputs_mask); i++) {
+        for (int i = 0; i < stdc_count_ones(outputs_mask); i++)
+        {
             AVFrame *to_send = frame;
             int pos;
 
@@ -812,7 +864,8 @@ static int packet_decode(DecoderPriv *dp, AVPacket *pkt, AVFrame *frame)
 
             // this is not the last output and sch_dec_send() consumes the frame
             // given to it, so make a temporary reference
-            if (outputs_mask) {
+            if (outputs_mask)
+            {
                 to_send = dp->frame_tmp_ref;
                 ret = av_frame_ref(to_send, frame);
                 if (ret < 0)
@@ -820,7 +873,8 @@ static int packet_decode(DecoderPriv *dp, AVPacket *pkt, AVFrame *frame)
             }
 
             ret = sch_dec_send(dp->sch, dp->sch_idx, pos, to_send);
-            if (ret < 0) {
+            if (ret < 0)
+            {
                 av_frame_unref(to_send);
                 return ret == AVERROR_EOF ? AVERROR_EXIT : ret;
             }
@@ -846,13 +900,14 @@ static int dec_standalone_open(DecoderPriv *dp, const AVPacket *pkt)
 
     memset(&o, 0, sizeof(o));
 
-    o.par       = fd->par_enc;
+    o.par = fd->par_enc;
     o.time_base = pkt->time_base;
 
     o.codec = dp->standalone_init.codec;
     if (!o.codec)
         o.codec = avcodec_find_decoder(o.par->codec_id);
-    if (!o.codec) {
+    if (!o.codec)
+    {
         const AVCodecDescriptor *desc = avcodec_descriptor_get(o.par->codec_id);
 
         av_log(dp, AV_LOG_ERROR, "Cannot find a decoder for codec ID '%s'\n",
@@ -910,7 +965,7 @@ fail:
 
 static int decoder_thread(void *arg)
 {
-    DecoderPriv  *dp = arg;
+    DecoderPriv *dp = arg;
     DecThreadContext dt;
     int ret = 0, input_status = 0;
 
@@ -920,24 +975,27 @@ static int decoder_thread(void *arg)
 
     dec_thread_set_name(dp);
 
-    while (!input_status) {
+    while (!input_status)
+    {
         int flush_buffers, have_data;
 
-        input_status  = sch_dec_receive(dp->sch, dp->sch_idx, dt.pkt);
-        have_data     = input_status >= 0 &&
-            (dt.pkt->buf || dt.pkt->side_data_elems ||
-             (intptr_t)dt.pkt->opaque == PKT_OPAQUE_SUB_HEARTBEAT ||
-             (intptr_t)dt.pkt->opaque == PKT_OPAQUE_FIX_SUB_DURATION);
+        input_status = sch_dec_receive(dp->sch, dp->sch_idx, dt.pkt);
+        have_data = input_status >= 0 &&
+                    (dt.pkt->buf || dt.pkt->side_data_elems ||
+                     (intptr_t)dt.pkt->opaque == PKT_OPAQUE_SUB_HEARTBEAT ||
+                     (intptr_t)dt.pkt->opaque == PKT_OPAQUE_FIX_SUB_DURATION);
         flush_buffers = input_status >= 0 && !have_data;
         if (!have_data)
             av_log(dp, AV_LOG_VERBOSE, "Decoder thread received %s packet\n",
                    flush_buffers ? "flush" : "EOF");
 
         // this is a standalone decoder that has not been initialized yet
-        if (!dp->dec_ctx) {
+        if (!dp->dec_ctx)
+        {
             if (flush_buffers)
                 continue;
-            if (input_status < 0) {
+            if (input_status < 0)
+            {
                 av_log(dp, AV_LOG_ERROR,
                        "Cannot initialize a standalone decoder\n");
                 ret = input_status;
@@ -957,12 +1015,14 @@ static int decoder_thread(void *arg)
         // AVERROR_EOF  - EOF from the decoder
         // AVERROR_EXIT - EOF from the scheduler
         // we treat them differently when flushing
-        if (ret == AVERROR_EXIT) {
+        if (ret == AVERROR_EXIT)
+        {
             ret = AVERROR_EOF;
             flush_buffers = 0;
         }
 
-        if (ret == AVERROR_EOF) {
+        if (ret == AVERROR_EOF)
+        {
             av_log(dp, AV_LOG_VERBOSE, "Decoder returned EOF, %s\n",
                    flush_buffers ? "resetting" : "finishing");
 
@@ -970,13 +1030,16 @@ static int decoder_thread(void *arg)
                 break;
 
             /* report last frame duration to the scheduler */
-            if (dp->dec_ctx->codec_type == AVMEDIA_TYPE_AUDIO) {
-                dt.pkt->pts       = dp->last_frame_pts + dp->last_frame_duration_est;
+            if (dp->dec_ctx->codec_type == AVMEDIA_TYPE_AUDIO)
+            {
+                dt.pkt->pts = dp->last_frame_pts + dp->last_frame_duration_est;
                 dt.pkt->time_base = dp->last_frame_tb;
             }
 
             avcodec_flush_buffers(dp->dec_ctx);
-        } else if (ret < 0) {
+        }
+        else if (ret < 0)
+        {
             av_log(dp, AV_LOG_ERROR, "Error processing packet in decoder: %s\n",
                    av_err2str(ret));
             break;
@@ -988,31 +1051,33 @@ static int decoder_thread(void *arg)
         ret = 0;
 
     // on success send EOF timestamp to our downstreams
-    if (ret >= 0) {
+    if (ret >= 0)
+    {
         float err_rate;
 
         av_frame_unref(dt.frame);
 
-        dt.frame->opaque    = (void*)(intptr_t)FRAME_OPAQUE_EOF;
-        dt.frame->pts       = dp->last_frame_pts == AV_NOPTS_VALUE ? AV_NOPTS_VALUE :
-                              dp->last_frame_pts + dp->last_frame_duration_est;
+        dt.frame->opaque = (void *)(intptr_t)FRAME_OPAQUE_EOF;
+        dt.frame->pts = dp->last_frame_pts == AV_NOPTS_VALUE ? AV_NOPTS_VALUE : dp->last_frame_pts + dp->last_frame_duration_est;
         dt.frame->time_base = dp->last_frame_tb;
 
         ret = sch_dec_send(dp->sch, dp->sch_idx, 0, dt.frame);
-        if (ret < 0 && ret != AVERROR_EOF) {
+        if (ret < 0 && ret != AVERROR_EOF)
+        {
             av_log(dp, AV_LOG_FATAL,
                    "Error signalling EOF timestamp: %s\n", av_err2str(ret));
             goto finish;
         }
         ret = 0;
 
-        err_rate = (dp->dec.frames_decoded || dp->dec.decode_errors) ?
-                   (float)dp->dec.decode_errors / (dp->dec.frames_decoded + dp->dec.decode_errors) : 0.f;
-        if (err_rate > max_error_rate) {
+        err_rate = (dp->dec.frames_decoded || dp->dec.decode_errors) ? (float)dp->dec.decode_errors / (dp->dec.frames_decoded + dp->dec.decode_errors) : 0.f;
+        if (err_rate > max_error_rate)
+        {
             av_log(dp, AV_LOG_FATAL, "Decode error rate %g exceeds maximum %g\n",
                    err_rate, max_error_rate);
             ret = FFMPEG_ERROR_RATE_EXCEEDED;
-        } else if (err_rate)
+        }
+        else if (err_rate)
             av_log(dp, AV_LOG_VERBOSE, "Decode error rate %g\n", err_rate);
     }
 
@@ -1030,8 +1095,10 @@ int dec_request_view(Decoder *d, const ViewSpecifier *vs,
     unsigned out_idx = 0;
     int ret;
 
-    if (dp->multiview_user_config) {
-        if (!vs || vs->type == VIEW_SPECIFIER_TYPE_NONE) {
+    if (dp->multiview_user_config)
+    {
+        if (!vs || vs->type == VIEW_SPECIFIER_TYPE_NONE)
+        {
             *src = SCH_DEC_OUT(dp->sch_idx, 0);
             return 0;
         }
@@ -1045,15 +1112,16 @@ int dec_request_view(Decoder *d, const ViewSpecifier *vs,
 
     // when multiview_user_config is not set, NONE specifier is treated
     // as requesting the base view
-    vs = (vs && vs->type != VIEW_SPECIFIER_TYPE_NONE) ? vs :
-         &(ViewSpecifier){ .type = VIEW_SPECIFIER_TYPE_IDX, .val = 0 };
+    vs = (vs && vs->type != VIEW_SPECIFIER_TYPE_NONE) ? vs : &(ViewSpecifier){.type = VIEW_SPECIFIER_TYPE_IDX, .val = 0};
 
     // check if the specifier matches an already-existing one
-    for (int i = 0; i < dp->nb_views_requested; i++) {
+    for (int i = 0; i < dp->nb_views_requested; i++)
+    {
         const ViewSpecifier *vs1 = &dp->views_requested[i].vs;
 
         if (vs->type == vs1->type &&
-            (vs->type == VIEW_SPECIFIER_TYPE_ALL || vs->val == vs1->val)) {
+            (vs->type == VIEW_SPECIFIER_TYPE_ALL || vs->val == vs1->val))
+        {
             *src = SCH_DEC_OUT(dp->sch_idx, dp->views_requested[i].out_idx);
             return 0;
         }
@@ -1061,7 +1129,8 @@ int dec_request_view(Decoder *d, const ViewSpecifier *vs,
 
     // we use a bitmask to map view IDs to decoder outputs, which
     // limits the number of outputs allowed
-    if (dp->nb_views_requested >= sizeof(dp->view_map[0].out_mask) * 8) {
+    if (dp->nb_views_requested >= sizeof(dp->view_map[0].out_mask) * 8)
+    {
         av_log(dp, AV_LOG_ERROR, "Too many view specifiers\n");
         return AVERROR(ENOSYS);
     }
@@ -1070,7 +1139,8 @@ int dec_request_view(Decoder *d, const ViewSpecifier *vs,
     if (ret < 0)
         return ret;
 
-    if (dp->nb_views_requested > 1) {
+    if (dp->nb_views_requested > 1)
+    {
         ret = sch_add_dec_output(dp->sch, dp->sch_idx);
         if (ret < 0)
             return ret;
@@ -1078,7 +1148,7 @@ int dec_request_view(Decoder *d, const ViewSpecifier *vs,
     }
 
     dp->views_requested[dp->nb_views_requested - 1].out_idx = out_idx;
-    dp->views_requested[dp->nb_views_requested - 1].vs      = *vs;
+    dp->views_requested[dp->nb_views_requested - 1].vs = *vs;
 
     *src = SCH_DEC_OUT(dp->sch_idx,
                        dp->views_requested[dp->nb_views_requested - 1].out_idx);
@@ -1092,14 +1162,14 @@ static int multiview_setup(DecoderPriv *dp, AVCodecContext *dec_ctx)
 
     unsigned nb_view_ids_av, nb_view_ids;
     unsigned *view_ids_av = NULL, *view_pos_av = NULL;
-    int      *view_ids    = NULL;
+    int *view_ids = NULL;
     int ret;
 
     // no views/only base view were requested - do nothing
     if (!dp->nb_views_requested ||
-        (dp->nb_views_requested == 1                               &&
+        (dp->nb_views_requested == 1 &&
          dp->views_requested[0].vs.type == VIEW_SPECIFIER_TYPE_IDX &&
-         dp->views_requested[0].vs.val  == 0))
+         dp->views_requested[0].vs.val == 0))
         return 0;
 
     av_freep(&dp->view_map);
@@ -1108,24 +1178,29 @@ static int multiview_setup(DecoderPriv *dp, AVCodecContext *dec_ctx)
     // retrieve views available in current CVS
     ret = av_opt_get_array_size(dec_ctx, "view_ids_available",
                                 AV_OPT_SEARCH_CHILDREN, &nb_view_ids_av);
-    if (ret < 0) {
+    if (ret < 0)
+    {
         av_log(dp, AV_LOG_ERROR,
                "Multiview decoding requested, but decoder '%s' does not "
-               "support it\n", dec_ctx->codec->name);
+               "support it\n",
+               dec_ctx->codec->name);
         return AVERROR(ENOSYS);
     }
 
-    if (nb_view_ids_av) {
+    if (nb_view_ids_av)
+    {
         unsigned nb_view_pos_av;
 
-        if (nb_view_ids_av >= sizeof(views_wanted) * 8) {
+        if (nb_view_ids_av >= sizeof(views_wanted) * 8)
+        {
             av_log(dp, AV_LOG_ERROR, "Too many views in video: %u\n", nb_view_ids_av);
             ret = AVERROR(ENOSYS);
             goto fail;
         }
 
         view_ids_av = av_calloc(nb_view_ids_av, sizeof(*view_ids_av));
-        if (!view_ids_av) {
+        if (!view_ids_av)
+        {
             ret = AVERROR(ENOMEM);
             goto fail;
         }
@@ -1138,9 +1213,11 @@ static int multiview_setup(DecoderPriv *dp, AVCodecContext *dec_ctx)
 
         ret = av_opt_get_array_size(dec_ctx, "view_pos_available",
                                     AV_OPT_SEARCH_CHILDREN, &nb_view_pos_av);
-        if (ret >= 0 && nb_view_pos_av == nb_view_ids_av) {
+        if (ret >= 0 && nb_view_pos_av == nb_view_ids_av)
+        {
             view_pos_av = av_calloc(nb_view_ids_av, sizeof(*view_pos_av));
-            if (!view_pos_av) {
+            if (!view_pos_av)
+            {
                 ret = AVERROR(ENOMEM);
                 goto fail;
             }
@@ -1151,12 +1228,15 @@ static int multiview_setup(DecoderPriv *dp, AVCodecContext *dec_ctx)
             if (ret < 0)
                 goto fail;
         }
-    } else {
+    }
+    else
+    {
         // assume there is a single view with ID=0
         nb_view_ids_av = 1;
         view_ids_av = av_calloc(nb_view_ids_av, sizeof(*view_ids_av));
         view_pos_av = av_calloc(nb_view_ids_av, sizeof(*view_pos_av));
-        if (!view_ids_av || !view_pos_av) {
+        if (!view_ids_av || !view_pos_av)
+        {
             ret = AVERROR(ENOMEM);
             goto fail;
         }
@@ -1164,7 +1244,8 @@ static int multiview_setup(DecoderPriv *dp, AVCodecContext *dec_ctx)
     }
 
     dp->view_map = av_calloc(nb_view_ids_av, sizeof(*dp->view_map));
-    if (!dp->view_map) {
+    if (!dp->view_map)
+    {
         ret = AVERROR(ENOMEM);
         goto fail;
     }
@@ -1174,78 +1255,94 @@ static int multiview_setup(DecoderPriv *dp, AVCodecContext *dec_ctx)
         dp->view_map[i].id = view_ids_av[i];
 
     // figure out which views should go to which output
-    for (int i = 0; i < dp->nb_views_requested; i++) {
+    for (int i = 0; i < dp->nb_views_requested; i++)
+    {
         const ViewSpecifier *vs = &dp->views_requested[i].vs;
 
-        switch (vs->type) {
+        switch (vs->type)
+        {
         case VIEW_SPECIFIER_TYPE_IDX:
-            if (vs->val >= nb_view_ids_av) {
+            if (vs->val >= nb_view_ids_av)
+            {
                 av_log(dp, exit_on_error ? AV_LOG_ERROR : AV_LOG_WARNING,
                        "View with index %u requested, but only %u views available "
                        "in current video sequence (more views may or may not be "
                        "available in later sequences).\n",
                        vs->val, nb_view_ids_av);
-                if (exit_on_error) {
+                if (exit_on_error)
+                {
                     ret = AVERROR(EINVAL);
                     goto fail;
                 }
 
                 continue;
             }
-            views_wanted                   |= 1U   << vs->val;
+            views_wanted |= 1U << vs->val;
             dp->view_map[vs->val].out_mask |= 1ULL << i;
 
             break;
-        case VIEW_SPECIFIER_TYPE_ID: {
+        case VIEW_SPECIFIER_TYPE_ID:
+        {
             int view_idx = -1;
 
-            for (unsigned j = 0; j < nb_view_ids_av; j++) {
-                if (view_ids_av[j] == vs->val) {
+            for (unsigned j = 0; j < nb_view_ids_av; j++)
+            {
+                if (view_ids_av[j] == vs->val)
+                {
                     view_idx = j;
                     break;
                 }
             }
-            if (view_idx < 0) {
+            if (view_idx < 0)
+            {
                 av_log(dp, exit_on_error ? AV_LOG_ERROR : AV_LOG_WARNING,
                        "View with ID %u requested, but is not available "
-                       "in the video sequence\n", vs->val);
-                if (exit_on_error) {
+                       "in the video sequence\n",
+                       vs->val);
+                if (exit_on_error)
+                {
                     ret = AVERROR(EINVAL);
                     goto fail;
                 }
 
                 continue;
             }
-            views_wanted                    |= 1U   << view_idx;
+            views_wanted |= 1U << view_idx;
             dp->view_map[view_idx].out_mask |= 1ULL << i;
 
             break;
-            }
-        case VIEW_SPECIFIER_TYPE_POS: {
+        }
+        case VIEW_SPECIFIER_TYPE_POS:
+        {
             int view_idx = -1;
 
-            for (unsigned j = 0; view_pos_av && j < nb_view_ids_av; j++) {
-                if (view_pos_av[j] == vs->val) {
+            for (unsigned j = 0; view_pos_av && j < nb_view_ids_av; j++)
+            {
+                if (view_pos_av[j] == vs->val)
+                {
                     view_idx = j;
                     break;
                 }
             }
-            if (view_idx < 0) {
+            if (view_idx < 0)
+            {
                 av_log(dp, exit_on_error ? AV_LOG_ERROR : AV_LOG_WARNING,
                        "View position '%s' requested, but is not available "
-                       "in the video sequence\n", av_stereo3d_view_name(vs->val));
-                if (exit_on_error) {
+                       "in the video sequence\n",
+                       av_stereo3d_view_name(vs->val));
+                if (exit_on_error)
+                {
                     ret = AVERROR(EINVAL);
                     goto fail;
                 }
 
                 continue;
             }
-            views_wanted                    |= 1U   << view_idx;
+            views_wanted |= 1U << view_idx;
             dp->view_map[view_idx].out_mask |= 1ULL << i;
 
             break;
-            }
+        }
         case VIEW_SPECIFIER_TYPE_ALL:
             views_wanted |= (1U << nb_view_ids_av) - 1;
 
@@ -1255,7 +1352,8 @@ static int multiview_setup(DecoderPriv *dp, AVCodecContext *dec_ctx)
             break;
         }
     }
-    if (!views_wanted) {
+    if (!views_wanted)
+    {
         av_log(dp, AV_LOG_ERROR, "No views were selected for decoding\n");
         ret = AVERROR(EINVAL);
         goto fail;
@@ -1264,12 +1362,14 @@ static int multiview_setup(DecoderPriv *dp, AVCodecContext *dec_ctx)
     // signal to decoder which views we want
     nb_view_ids = stdc_count_ones(views_wanted);
     view_ids = av_malloc_array(nb_view_ids, sizeof(*view_ids));
-    if (!view_ids) {
+    if (!view_ids)
+    {
         ret = AVERROR(ENOMEM);
         goto fail;
     }
 
-    for (unsigned i = 0; i < nb_view_ids; i++) {
+    for (unsigned i = 0; i < nb_view_ids; i++)
+    {
         int pos;
 
         av_assert0(views_wanted);
@@ -1287,9 +1387,11 @@ static int multiview_setup(DecoderPriv *dp, AVCodecContext *dec_ctx)
     if (ret < 0)
         goto fail;
 
-    if (!dp->frame_tmp_ref) {
+    if (!dp->frame_tmp_ref)
+    {
         dp->frame_tmp_ref = av_frame_alloc();
-        if (!dp->frame_tmp_ref) {
+        if (!dp->frame_tmp_ref)
+        {
             ret = AVERROR(ENOMEM);
             goto fail;
         }
@@ -1305,36 +1407,41 @@ fail:
 
 static void multiview_check_manual(DecoderPriv *dp, const AVDictionary *dec_opts)
 {
-    if (av_dict_get(dec_opts, "view_ids", NULL, 0)) {
+    if (av_dict_get(dec_opts, "view_ids", NULL, 0))
+    {
         av_log(dp, AV_LOG_WARNING, "Manually selecting views with -view_ids "
-               "is not recommended, use view specifiers instead\n");
+                                   "is not recommended, use view specifiers instead\n");
         dp->multiview_user_config = 1;
     }
 }
 
 static enum AVPixelFormat get_format(AVCodecContext *s, const enum AVPixelFormat *pix_fmts)
 {
-    DecoderPriv  *dp = s->opaque;
+    DecoderPriv *dp = s->opaque;
     const enum AVPixelFormat *p;
     int ret;
 
     ret = multiview_setup(dp, s);
-    if (ret < 0) {
+    if (ret < 0)
+    {
         av_log(dp, AV_LOG_ERROR, "Error setting up multiview decoding: %s\n",
                av_err2str(ret));
         return AV_PIX_FMT_NONE;
     }
 
-    for (p = pix_fmts; *p != AV_PIX_FMT_NONE; p++) {
+    for (p = pix_fmts; *p != AV_PIX_FMT_NONE; p++)
+    {
         const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(*p);
-        const AVCodecHWConfig  *config = NULL;
+        const AVCodecHWConfig *config = NULL;
 
         if (!(desc->flags & AV_PIX_FMT_FLAG_HWACCEL))
             break;
 
         if (dp->hwaccel_id == HWACCEL_GENERIC ||
-            dp->hwaccel_id == HWACCEL_AUTO) {
-            for (int i = 0;; i++) {
+            dp->hwaccel_id == HWACCEL_AUTO)
+        {
+            for (int i = 0;; i++)
+            {
                 config = avcodec_get_hw_config(s->codec, i);
                 if (!config)
                     break;
@@ -1345,7 +1452,8 @@ static enum AVPixelFormat get_format(AVCodecContext *s, const enum AVPixelFormat
                     break;
             }
         }
-        if (config && config->device_type == dp->hwaccel_device_type) {
+        if (config && config->device_type == dp->hwaccel_device_type)
+        {
             dp->hwaccel_pix_fmt = *p;
             break;
         }
@@ -1359,13 +1467,16 @@ static int get_buffer(AVCodecContext *dec_ctx, AVFrame *frame, int flags)
     DecoderPriv *dp = dec_ctx->opaque;
 
     // for multiview video, store the output mask in frame opaque
-    if (dp->nb_view_map) {
+    if (dp->nb_view_map)
+    {
         const AVFrameSideData *sd = av_frame_get_side_data(frame, AV_FRAME_DATA_VIEW_ID);
-        int view_id = sd ? *(int*)sd->data : 0;
+        int view_id = sd ? *(int *)sd->data : 0;
 
-        for (int i = 0; i < dp->nb_view_map; i++) {
-            if (dp->view_map[i].id == view_id) {
-                frame->opaque = (void*)dp->view_map[i].out_mask;
+        for (int i = 0; i < dp->nb_view_map; i++)
+        {
+            if (dp->view_map[i].id == view_id)
+            {
+                frame->opaque = (void *)dp->view_map[i].out_mask;
                 break;
             }
         }
@@ -1378,7 +1489,8 @@ static HWDevice *hw_device_match_by_codec(const AVCodec *codec)
 {
     const AVCodecHWConfig *config;
     HWDevice *dev;
-    for (int i = 0;; i++) {
+    for (int i = 0;; i++)
+    {
         config = avcodec_get_hw_config(codec, i);
         if (!config)
             return NULL;
@@ -1399,36 +1511,54 @@ static int hw_device_setup_for_decode(DecoderPriv *dp,
     HWDevice *dev = NULL;
     int err, auto_device = 0;
 
-    if (hwaccel_device) {
+    if (hwaccel_device)
+    {
         dev = hw_device_get_by_name(hwaccel_device);
-        if (!dev) {
-            if (dp->hwaccel_id == HWACCEL_AUTO) {
+        if (!dev)
+        {
+            if (dp->hwaccel_id == HWACCEL_AUTO)
+            {
                 auto_device = 1;
-            } else if (dp->hwaccel_id == HWACCEL_GENERIC) {
+            }
+            else if (dp->hwaccel_id == HWACCEL_GENERIC)
+            {
                 type = dp->hwaccel_device_type;
                 err = hw_device_init_from_type(type, hwaccel_device,
                                                &dev);
-            } else {
+            }
+            else
+            {
                 // This will be dealt with by API-specific initialisation
                 // (using hwaccel_device), so nothing further needed here.
                 return 0;
             }
-        } else {
-            if (dp->hwaccel_id == HWACCEL_AUTO) {
+        }
+        else
+        {
+            if (dp->hwaccel_id == HWACCEL_AUTO)
+            {
                 dp->hwaccel_device_type = dev->type;
-            } else if (dp->hwaccel_device_type != dev->type) {
+            }
+            else if (dp->hwaccel_device_type != dev->type)
+            {
                 av_log(dp, AV_LOG_ERROR, "Invalid hwaccel device "
-                       "specified for decoder: device %s of type %s is not "
-                       "usable with hwaccel %s.\n", dev->name,
+                                         "specified for decoder: device %s of type %s is not "
+                                         "usable with hwaccel %s.\n",
+                       dev->name,
                        av_hwdevice_get_type_name(dev->type),
                        av_hwdevice_get_type_name(dp->hwaccel_device_type));
                 return AVERROR(EINVAL);
             }
         }
-    } else {
-        if (dp->hwaccel_id == HWACCEL_AUTO) {
+    }
+    else
+    {
+        if (dp->hwaccel_id == HWACCEL_AUTO)
+        {
             auto_device = 1;
-        } else if (dp->hwaccel_id == HWACCEL_GENERIC) {
+        }
+        else if (dp->hwaccel_id == HWACCEL_GENERIC)
+        {
             type = dp->hwaccel_device_type;
             dev = hw_device_get_by_type(type);
 
@@ -1445,9 +1575,12 @@ static int hw_device_setup_for_decode(DecoderPriv *dp,
 
             if (!dev)
                 err = hw_device_init_from_type(type, NULL, &dev);
-        } else {
+        }
+        else
+        {
             dev = hw_device_match_by_codec(codec);
-            if (!dev) {
+            if (!dev)
+            {
                 // No device for this codec, but not using generic hwaccel
                 // and therefore may well not need one - ignore.
                 return 0;
@@ -1455,24 +1588,29 @@ static int hw_device_setup_for_decode(DecoderPriv *dp,
         }
     }
 
-    if (auto_device) {
-        if (!avcodec_get_hw_config(codec, 0)) {
+    if (auto_device)
+    {
+        if (!avcodec_get_hw_config(codec, 0))
+        {
             // Decoder does not support any hardware devices.
             return 0;
         }
-        for (int i = 0; !dev; i++) {
+        for (int i = 0; !dev; i++)
+        {
             config = avcodec_get_hw_config(codec, i);
             if (!config)
                 break;
             type = config->device_type;
             dev = hw_device_get_by_type(type);
-            if (dev) {
+            if (dev)
+            {
                 av_log(dp, AV_LOG_INFO, "Using auto "
-                       "hwaccel type %s with existing device %s.\n",
+                                        "hwaccel type %s with existing device %s.\n",
                        av_hwdevice_get_type_name(type), dev->name);
             }
         }
-        for (int i = 0; !dev; i++) {
+        for (int i = 0; !dev; i++)
+        {
             config = avcodec_get_hw_config(codec, i);
             if (!config)
                 break;
@@ -1480,34 +1618,43 @@ static int hw_device_setup_for_decode(DecoderPriv *dp,
             // Try to make a new device of this type.
             err = hw_device_init_from_type(type, hwaccel_device,
                                            &dev);
-            if (err < 0) {
+            if (err < 0)
+            {
                 // Can't make a device of this type.
                 continue;
             }
-            if (hwaccel_device) {
+            if (hwaccel_device)
+            {
                 av_log(dp, AV_LOG_INFO, "Using auto "
-                       "hwaccel type %s with new device created "
-                       "from %s.\n", av_hwdevice_get_type_name(type),
+                                        "hwaccel type %s with new device created "
+                                        "from %s.\n",
+                       av_hwdevice_get_type_name(type),
                        hwaccel_device);
-            } else {
+            }
+            else
+            {
                 av_log(dp, AV_LOG_INFO, "Using auto "
-                       "hwaccel type %s with new default device.\n",
+                                        "hwaccel type %s with new default device.\n",
                        av_hwdevice_get_type_name(type));
             }
         }
-        if (dev) {
+        if (dev)
+        {
             dp->hwaccel_device_type = type;
-        } else {
+        }
+        else
+        {
             av_log(dp, AV_LOG_INFO, "Auto hwaccel "
-                   "disabled: no device found.\n");
+                                    "disabled: no device found.\n");
             dp->hwaccel_id = HWACCEL_NONE;
             return 0;
         }
     }
 
-    if (!dev) {
+    if (!dev)
+    {
         av_log(dp, AV_LOG_ERROR, "No device available "
-               "for decoder: device type %s needed for codec %s.\n",
+                                 "for decoder: device type %s needed for codec %s.\n",
                av_hwdevice_get_type_name(type), codec->name);
         return err;
     }
@@ -1525,15 +1672,15 @@ static int dec_open(DecoderPriv *dp, AVDictionary **dec_opts,
     const AVCodec *codec = o->codec;
     int ret;
 
-    dp->flags      = o->flags;
+    dp->flags = o->flags;
     dp->log_parent = o->log_parent;
 
-    dp->dec.type                = codec->type;
-    dp->framerate_in            = o->framerate;
+    dp->dec.type = codec->type;
+    dp->framerate_in = o->framerate;
 
-    dp->hwaccel_id              = o->hwaccel_id;
-    dp->hwaccel_device_type     = o->hwaccel_device_type;
-    dp->hwaccel_output_format   = o->hwaccel_output_format;
+    dp->hwaccel_id = o->hwaccel_id;
+    dp->hwaccel_device_type = o->hwaccel_device_type;
+    dp->hwaccel_output_format = o->hwaccel_output_format;
 
     snprintf(dp->log_name, sizeof(dp->log_name), "dec:%s", codec->name);
 
@@ -1542,8 +1689,10 @@ static int dec_open(DecoderPriv *dp, AVDictionary **dec_opts,
         return AVERROR(ENOMEM);
 
     if (codec->type == AVMEDIA_TYPE_SUBTITLE &&
-        (dp->flags & DECODER_FLAG_FIX_SUB_DURATION)) {
-        for (int i = 0; i < FF_ARRAY_ELEMS(dp->sub_prev); i++) {
+        (dp->flags & DECODER_FLAG_FIX_SUB_DURATION))
+    {
+        for (int i = 0; i < FF_ARRAY_ELEMS(dp->sub_prev); i++)
+        {
             dp->sub_prev[i] = av_frame_alloc();
             if (!dp->sub_prev[i])
                 return AVERROR(ENOMEM);
@@ -1560,21 +1709,23 @@ static int dec_open(DecoderPriv *dp, AVDictionary **dec_opts,
         return AVERROR(ENOMEM);
 
     ret = avcodec_parameters_to_context(dp->dec_ctx, o->par);
-    if (ret < 0) {
+    if (ret < 0)
+    {
         av_log(dp, AV_LOG_ERROR, "Error initializing the decoder context.\n");
         return ret;
     }
 
-    dp->dec_ctx->opaque                = dp;
-    dp->dec_ctx->get_format            = get_format;
-    dp->dec_ctx->get_buffer2           = get_buffer;
-    dp->dec_ctx->pkt_timebase          = o->time_base;
+    dp->dec_ctx->opaque = dp;
+    dp->dec_ctx->get_format = get_format;
+    dp->dec_ctx->get_buffer2 = get_buffer;
+    dp->dec_ctx->pkt_timebase = o->time_base;
 
     if (!av_dict_get(*dec_opts, "threads", NULL, 0))
         av_dict_set(dec_opts, "threads", "auto", 0);
 
     ret = hw_device_setup_for_decode(dp, codec, o->hwaccel_device);
-    if (ret < 0) {
+    if (ret < 0)
+    {
         av_log(dp, AV_LOG_ERROR,
                "Hardware device setup failed for decoder: %s\n",
                av_err2str(ret));
@@ -1582,7 +1733,8 @@ static int dec_open(DecoderPriv *dp, AVDictionary **dec_opts,
     }
 
     ret = av_opt_set_dict2(dp->dec_ctx, dec_opts, AV_OPT_SEARCH_CHILDREN);
-    if (ret < 0) {
+    if (ret < 0)
+    {
         av_log(dp, AV_LOG_ERROR, "Error applying decoder options: %s\n",
                av_err2str(ret));
         return ret;
@@ -1596,16 +1748,18 @@ static int dec_open(DecoderPriv *dp, AVDictionary **dec_opts,
         dp->dec_ctx->flags |= AV_CODEC_FLAG_BITEXACT;
 
     // we apply cropping ourselves
-    dp->apply_cropping          = dp->dec_ctx->apply_cropping;
+    dp->apply_cropping = dp->dec_ctx->apply_cropping;
     dp->dec_ctx->apply_cropping = 0;
 
-    if ((ret = avcodec_open2(dp->dec_ctx, codec, NULL)) < 0) {
+    if ((ret = avcodec_open2(dp->dec_ctx, codec, NULL)) < 0)
+    {
         av_log(dp, AV_LOG_ERROR, "Error while opening decoder: %s\n",
                av_err2str(ret));
         return ret;
     }
 
-    if (dp->dec_ctx->hw_device_ctx) {
+    if (dp->dec_ctx->hw_device_ctx)
+    {
         // Update decoder extra_hw_frames option to account for the
         // frames held in queues inside the ffmpeg utility.  This is
         // called after avcodec_open2() because the user-set value of
@@ -1618,25 +1772,29 @@ static int dec_open(DecoderPriv *dp, AVDictionary **dec_opts,
             dp->dec_ctx->extra_hw_frames = extra_frames;
     }
 
-    dp->dec.subtitle_header      = dp->dec_ctx->subtitle_header;
+    dp->dec.subtitle_header = dp->dec_ctx->subtitle_header;
     dp->dec.subtitle_header_size = dp->dec_ctx->subtitle_header_size;
 
-    if (param_out) {
-        if (dp->dec_ctx->codec_type == AVMEDIA_TYPE_AUDIO) {
-            param_out->format               = dp->dec_ctx->sample_fmt;
-            param_out->sample_rate          = dp->dec_ctx->sample_rate;
+    if (param_out)
+    {
+        if (dp->dec_ctx->codec_type == AVMEDIA_TYPE_AUDIO)
+        {
+            param_out->format = dp->dec_ctx->sample_fmt;
+            param_out->sample_rate = dp->dec_ctx->sample_rate;
 
             ret = av_channel_layout_copy(&param_out->ch_layout, &dp->dec_ctx->ch_layout);
             if (ret < 0)
                 return ret;
-        } else if (dp->dec_ctx->codec_type == AVMEDIA_TYPE_VIDEO) {
-            param_out->format               = dp->dec_ctx->pix_fmt;
-            param_out->width                = dp->dec_ctx->width;
-            param_out->height               = dp->dec_ctx->height;
-            param_out->sample_aspect_ratio  = dp->dec_ctx->sample_aspect_ratio;
-            param_out->colorspace           = dp->dec_ctx->colorspace;
-            param_out->color_range          = dp->dec_ctx->color_range;
-            param_out->alpha_mode           = dp->dec_ctx->alpha_mode;
+        }
+        else if (dp->dec_ctx->codec_type == AVMEDIA_TYPE_VIDEO)
+        {
+            param_out->format = dp->dec_ctx->pix_fmt;
+            param_out->width = dp->dec_ctx->width;
+            param_out->height = dp->dec_ctx->height;
+            param_out->sample_aspect_ratio = dp->dec_ctx->sample_aspect_ratio;
+            param_out->colorspace = dp->dec_ctx->colorspace;
+            param_out->color_range = dp->dec_ctx->color_range;
+            param_out->alpha_mode = dp->dec_ctx->alpha_mode;
         }
 
         av_frame_side_data_free(&param_out->side_data, &param_out->nb_side_data);
@@ -1673,7 +1831,7 @@ int dec_init(Decoder **pdec, Scheduler *sch,
 
     return dp->sch_idx;
 fail:
-    dec_free((Decoder**)&dp);
+    dec_free((Decoder **)&dp);
     return ret;
 }
 
@@ -1681,8 +1839,8 @@ int dec_create(const OptionsContext *o, const char *arg, Scheduler *sch)
 {
     DecoderPriv *dp;
 
-    OutputFile      *of;
-    OutputStream    *ost;
+    OutputFile *of;
+    OutputStream *ost;
     int of_index, ost_index;
     char *p;
 
@@ -1696,7 +1854,8 @@ int dec_create(const OptionsContext *o, const char *arg, Scheduler *sch)
     dp->index = nb_decoders;
 
     ret = GROW_ARRAY(decoders, nb_decoders);
-    if (ret < 0) {
+    if (ret < 0)
+    {
         dec_free((Decoder **)&dp);
         return ret;
     }
@@ -1704,20 +1863,23 @@ int dec_create(const OptionsContext *o, const char *arg, Scheduler *sch)
     decoders[nb_decoders - 1] = (Decoder *)dp;
 
     of_index = strtol(arg, &p, 0);
-    if (of_index < 0 || of_index >= nb_output_files) {
+    if (of_index < 0 || of_index >= nb_output_files)
+    {
         av_log(dp, AV_LOG_ERROR, "Invalid output file index '%d' in %s\n", of_index, arg);
         return AVERROR(EINVAL);
     }
     of = output_files[of_index];
 
     ost_index = strtol(p + 1, NULL, 0);
-    if (ost_index < 0 || ost_index >= of->nb_streams) {
+    if (ost_index < 0 || ost_index >= of->nb_streams)
+    {
         av_log(dp, AV_LOG_ERROR, "Invalid output stream index '%d' in %s\n", ost_index, arg);
         return AVERROR(EINVAL);
     }
     ost = of->streams[ost_index];
 
-    if (!ost->enc) {
+    if (!ost->enc)
+    {
         av_log(dp, AV_LOG_ERROR, "Output stream %s has no encoder\n", arg);
         return AVERROR(EINVAL);
     }
@@ -1739,10 +1901,12 @@ int dec_create(const OptionsContext *o, const char *arg, Scheduler *sch)
 
     multiview_check_manual(dp, dp->standalone_init.opts);
 
-    if (o->codec_names.nb_opt) {
+    if (o->codec_names.nb_opt)
+    {
         const char *name = o->codec_names.opt[o->codec_names.nb_opt - 1].u.str;
         dp->standalone_init.codec = avcodec_find_decoder_by_name(name);
-        if (!dp->standalone_init.codec) {
+        if (!dp->standalone_init.codec)
+        {
             av_log(dp, AV_LOG_ERROR, "No such decoder: %s\n", name);
             return AVERROR_DECODER_NOT_FOUND;
         }

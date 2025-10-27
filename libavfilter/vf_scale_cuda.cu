@@ -1329,3 +1329,125 @@ LANCZOS_KERNELS_RGB(bgr0)
 LANCZOS_KERNELS_RGB(rgba)
 LANCZOS_KERNELS_RGB(bgra)
 }
+
+// ===== UYVY422 -> YUV422P10LE / YUV422P: device helpers =====
+__device__ inline void uyvy_fetch_y(uchar &Y, cudaTextureObject_t tex, float xi, float yi) {
+    // 최근접: 정수 좌표로 스냅
+    int sx = (int)floorf(xi);
+    int sy = (int)floorf(yi);
+    uchar2 p = tex2D<uchar2>(tex, sx, sy);
+    Y = p.y;
+}
+
+__device__ inline void uyvy_fetch_uv(uchar &U, uchar &V, cudaTextureObject_t tex, float xi_chroma, float yi) {
+    // xi_chroma는 "크로마 해상도 기준" 좌표 (가로 절반). 실제 픽셀 좌표로 2배.
+    int sx_even = ((int)floorf(xi_chroma)) * 2;
+    int sy      = (int)floorf(yi);
+    uchar2 pe = tex2D<uchar2>(tex, sx_even    , sy); // even:  (U, Y0)
+    uchar2 po = tex2D<uchar2>(tex, sx_even + 1, sy); // odd :  (V, Y1)
+    U = pe.x;
+    V = po.x;
+}
+
+// 8->16 확장 (10비트 마스크), 이미 위쪽에 conv_8to16/ mask_10bit가 정의되어 있음.
+
+// ===== 공통 커널 바디: 이름만 다르고 내용은 Nearest로 동일 =====
+#define UYVY_Y_KERNEL_BODY(OUT_T, CONVERT_TO_OUT)                                      \
+    int xo = blockIdx.x * blockDim.x + threadIdx.x;                                     \
+    int yo = blockIdx.y * blockDim.y + threadIdx.y;                                     \
+    if (xo >= dst_width || yo >= dst_height) return;                                    \
+    float hscale = (float)src_width  / (float)dst_width;                                \
+    float vscale = (float)src_height / (float)dst_height;                               \
+    float xi = (xo + 0.5f) * hscale + src_left;                                         \
+    float yi = (yo + 0.5f) * vscale + src_top;                                          \
+    uchar y8;                                                                           \
+    uyvy_fetch_y(y8, src_tex_0, xi, yi);                                                \
+    dst_0[yo * (dst_pitch/sizeof(OUT_T)) + xo] = (CONVERT_TO_OUT);
+
+#define UYVY_UV_KERNEL_BODY(OUT_T, CONVERT_TO_OUT)                                      \
+    int xo = blockIdx.x * blockDim.x + threadIdx.x;                                     \
+    int yo = blockIdx.y * blockDim.y + threadIdx.y;                                     \
+    if (xo >= dst_width || yo >= dst_height) return;                                    \
+    /* UV용 소스 크기는 가로만 절반 개념이라 xi_chroma 계산 시 src_width는 이미 절반이 전달됨 */ \
+    float hscale = (float)src_width  / (float)dst_width;                                 \
+    float vscale = (float)src_height / (float)dst_height;                                \
+    float xi_ch = (xo + 0.5f) * hscale + src_left;                                       \
+    float yi    = (yo + 0.5f) * vscale + src_top;                                        \
+    uchar u8, v8;                                                                        \
+    uyvy_fetch_uv(u8, v8, src_tex_0, xi_ch, yi);                                         \
+    int pitch1 = dst_pitch/sizeof(OUT_T);                                                \
+    int pitch2 = pitch1;                                                                 \
+    dst_1[yo * pitch1 + xo] = (CONVERT_TO_OUT(u8));                                       \
+    dst_2[yo * pitch2 + xo] = (CONVERT_TO_OUT(v8));
+
+// 8비트/10비트 변환 람다
+__device__ inline uchar  to_u8 (uchar x){ return x; }
+__device__ inline ushort to_u10(uchar x){ return conv_8to16(x, mask_10bit); }
+
+// ===== 커널 선언 매크로 (Nearest/Bilinear/Bicubic/Lanczos 모두 동일 바디 사용) =====
+#define DECL_UYVY_YUV422P_KERNELS(SUFFIX, OUT_T, TOFUNC)                                            \
+extern "C" {                                                                                        \
+__global__ void Subsample_Nearest_uyvy422_yuv422p##SUFFIX(                                          \
+    cudaTextureObject_t src_tex_0, cudaTextureObject_t, cudaTextureObject_t, cudaTextureObject_t,   \
+    OUT_T *dst_0, OUT_T*, OUT_T*, OUT_T*,                                                           \
+    int dst_width, int dst_height, int dst_pitch,                                                   \
+    int src_left, int src_top, int src_width, int src_height, float)                                \
+{ UYVY_Y_KERNEL_BODY(OUT_T, TOFUNC(y8)); }                                                          \
+                                                                                                    \
+__global__ void Subsample_Nearest_uyvy422_yuv422p##SUFFIX##_uv(                                     \
+    cudaTextureObject_t src_tex_0, cudaTextureObject_t, cudaTextureObject_t, cudaTextureObject_t,   \
+    OUT_T*, OUT_T *dst_1, OUT_T *dst_2, OUT_T*,                                                     \
+    int dst_width, int dst_height, int dst_pitch,                                                   \
+    int src_left, int src_top, int src_width, int src_height, float)                                \
+{ UYVY_UV_KERNEL_BODY(OUT_T, TOFUNC); }                                                             \
+                                                                                                    \
+__global__ void Subsample_Bilinear_uyvy422_yuv422p##SUFFIX(                                         \
+    cudaTextureObject_t src_tex_0, cudaTextureObject_t, cudaTextureObject_t, cudaTextureObject_t,   \
+    OUT_T *dst_0, OUT_T*, OUT_T*, OUT_T*,                                                           \
+    int dst_width, int dst_height, int dst_pitch,                                                   \
+    int src_left, int src_top, int src_width, int src_height, float)                                \
+{ UYVY_Y_KERNEL_BODY(OUT_T, TOFUNC(y8)); }                                                          \
+                                                                                                    \
+__global__ void Subsample_Bilinear_uyvy422_yuv422p##SUFFIX##_uv(                                    \
+    cudaTextureObject_t src_tex_0, cudaTextureObject_t, cudaTextureObject_t, cudaTextureObject_t,   \
+    OUT_T*, OUT_T *dst_1, OUT_T *dst_2, OUT_T*,                                                     \
+    int dst_width, int dst_height, int dst_pitch,                                                   \
+    int src_left, int src_top, int src_width, int src_height, float)                                \
+{ UYVY_UV_KERNEL_BODY(OUT_T, TOFUNC); }                                                             \
+                                                                                                    \
+__global__ void Subsample_Bicubic_uyvy422_yuv422p##SUFFIX(                                          \
+    cudaTextureObject_t src_tex_0, cudaTextureObject_t, cudaTextureObject_t, cudaTextureObject_t,   \
+    OUT_T *dst_0, OUT_T*, OUT_T*, OUT_T*,                                                           \
+    int dst_width, int dst_height, int dst_pitch,                                                   \
+    int src_left, int src_top, int src_width, int src_height, float)                                \
+{ UYVY_Y_KERNEL_BODY(OUT_T, TOFUNC(y8)); }                                                          \
+                                                                                                    \
+__global__ void Subsample_Bicubic_uyvy422_yuv422p##SUFFIX##_uv(                                     \
+    cudaTextureObject_t src_tex_0, cudaTextureObject_t, cudaTextureObject_t, cudaTextureObject_t,   \
+    OUT_T*, OUT_T *dst_1, OUT_T *dst_2, OUT_T*,                                                     \
+    int dst_width, int dst_height, int dst_pitch,                                                   \
+    int src_left, int src_top, int src_width, int src_height, float)                                \
+{ UYVY_UV_KERNEL_BODY(OUT_T, TOFUNC); }                                                             \
+                                                                                                    \
+__global__ void Subsample_Lanczos_uyvy422_yuv422p##SUFFIX(                                          \
+    cudaTextureObject_t src_tex_0, cudaTextureObject_t, cudaTextureObject_t, cudaTextureObject_t,   \
+    OUT_T *dst_0, OUT_T*, OUT_T*, OUT_T*,                                                           \
+    int dst_width, int dst_height, int dst_pitch,                                                   \
+    int src_left, int src_top, int src_width, int src_height, float)                                \
+{ UYVY_Y_KERNEL_BODY(OUT_T, TOFUNC(y8)); }                                                          \
+                                                                                                    \
+__global__ void Subsample_Lanczos_uyvy422_yuv422p##SUFFIX##_uv(                                     \
+    cudaTextureObject_t src_tex_0, cudaTextureObject_t, cudaTextureObject_t, cudaTextureObject_t,   \
+    OUT_T*, OUT_T *dst_1, OUT_T *dst_2, OUT_T*,                                                     \
+    int dst_width, int dst_height, int dst_pitch,                                                   \
+    int src_left, int src_top, int src_width, int src_height, float)                                \
+{ UYVY_UV_KERNEL_BODY(OUT_T, TOFUNC); }                                                             \
+}
+
+// SUFFIX ""  -> yuv422p  (8-bit  planar)
+// SUFFIX "10le" -> yuv422p10le (16-bit 저장, 10비트 좌측정렬)
+// } // extern "C" 앞에 선언했으면 여기 닫지 말고, 이미 extern "C" 블록 안이라면 제거
+
+// 실제 선언 생성
+DECL_UYVY_YUV422P_KERNELS(   , uchar , to_u8 )
+DECL_UYVY_YUV422P_KERNELS(10le, ushort, to_u10)
